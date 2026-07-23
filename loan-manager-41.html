@@ -994,6 +994,8 @@
         .reminder-item.rec-weekly { --accent: #a875d8; }
         .reminder-item.rec-monthly { --accent: #3ec9c9; }
         .reminder-item.rec-yearly { --accent: #d4af37; }
+        .reminder-item.rec-birthday { --accent: #e0679a; }
+        .reminder-item.rec-once { --accent: #8a9aa8; }
         .reminder-top {
             display: flex;
             justify-content: space-between;
@@ -2074,7 +2076,7 @@
             <h3 id="reminderModalTitle">افزودن یادآور</h3>
             <button class="close-modal-btn" id="closeAddReminderModalBtn">×</button>
         </div>
-        <div class="form-group"><label>عنوان</label><input type="text" id="reminderTitleInput" maxlength="60" placeholder="مثلاً: قرص ویتامین D"></div>
+        <div class="form-group"><label>عنوان</label><input type="text" id="reminderTitleInput" maxlength="60" placeholder="مثلاً: قرص ویتامین D، تولد سارا، قرار ملاقات"></div>
         <div class="form-group">
             <label>تکرار</label>
             <select id="reminderRecurrenceInput">
@@ -2082,6 +2084,8 @@
                 <option value="weekly">هفتگی</option>
                 <option value="monthly" selected>ماهانه</option>
                 <option value="yearly">سالانه</option>
+                <option value="birthday">تولد / زادروز</option>
+                <option value="once">یادآوری تکی (یک‌بار)</option>
             </select>
         </div>
         <div class="form-group recurrence-sub-field" id="reminderWeekdayGroup">
@@ -2103,6 +2107,22 @@
                 </select>
             </div>
             <div class="form-group"><label>روز</label><input type="number" id="reminderYearDayInput" min="1" max="31" value="1"></div>
+        </div>
+        <div class="form-group recurrence-sub-field" id="reminderBirthYearGroup">
+            <label>سال تولد (شمسی - اختیاری، برای نمایش سن)</label>
+            <input type="number" id="reminderBirthYearInput" min="1200" max="1500" placeholder="مثلاً ۱۳۷۵">
+        </div>
+        <div class="form-row-inline recurrence-sub-field" id="reminderOnceGroup">
+            <div class="form-group"><label>سال (شمسی)</label><input type="number" id="reminderOnceYearInput" min="1300" max="1500" placeholder="۱۴۰۵"></div>
+            <div class="form-group"><label>ماه</label>
+                <select id="reminderOnceMonthInput">
+                    <option value="1">فروردین</option><option value="2">اردیبهشت</option><option value="3">خرداد</option>
+                    <option value="4">تیر</option><option value="5">مرداد</option><option value="6">شهریور</option>
+                    <option value="7">مهر</option><option value="8">آبان</option><option value="9">آذر</option>
+                    <option value="10">دی</option><option value="11">بهمن</option><option value="12">اسفند</option>
+                </select>
+            </div>
+            <div class="form-group"><label>روز</label><input type="number" id="reminderOnceDayInput" min="1" max="31" value="1"></div>
         </div>
         <div class="form-group"><label>ساعت</label><input type="time" id="reminderTimeInput" value="09:00"></div>
         <div class="form-group"><label>یادداشت (اختیاری)</label><textarea id="reminderNoteInput" rows="2" maxlength="200"></textarea></div>
@@ -2519,8 +2539,9 @@
     const REMINDERS_STORAGE_KEY = 'retro_reminders_v1';
     let reminders = [];
     let editingReminderIndex = null;
-    const REMINDER_RECURRENCE_LABELS = { daily: 'روزانه', weekly: 'هفتگی', monthly: 'ماهانه', yearly: 'سالانه' };
+    const REMINDER_RECURRENCE_LABELS = { daily: 'روزانه', weekly: 'هفتگی', monthly: 'ماهانه', yearly: 'سالانه', birthday: 'تولد', once: 'یک‌بار' };
     const REMINDER_CYCLE_LEN = { daily: 31, weekly: 4, monthly: 12, yearly: 5 };
+    const REMINDER_STREAK_TYPES = ['daily', 'weekly', 'monthly', 'yearly'];
     function reminderCycleBadgeLabel(recurrence) {
         if (recurrence === 'daily') return 'ماه پیاپی';
         if (recurrence === 'weekly') return 'ماه پیاپی';
@@ -2916,12 +2937,14 @@
     // ========== یادآورها: داده و ذخیره‌سازی ==========
     function normalizeReminder(r) {
         if (!r || typeof r !== 'object') return null;
-        if (!['daily', 'weekly', 'monthly', 'yearly'].includes(r.recurrence)) r.recurrence = 'monthly';
+        if (!['daily', 'weekly', 'monthly', 'yearly', 'birthday', 'once'].includes(r.recurrence)) r.recurrence = 'monthly';
         if (typeof r.title !== 'string' || !r.title) r.title = 'یادآور بدون عنوان';
         if (typeof r.time !== 'string' || !/^\d{2}:\d{2}$/.test(r.time)) r.time = '09:00';
         if (typeof r.weekday !== 'number' || r.weekday < 0 || r.weekday > 6) r.weekday = 6;
         if (typeof r.jDay !== 'number' || r.jDay < 1 || r.jDay > 31) r.jDay = 1;
         if (typeof r.jMonth !== 'number' || r.jMonth < 1 || r.jMonth > 12) r.jMonth = 1;
+        if (typeof r.birthYear !== 'number' || r.birthYear < 1200 || r.birthYear > 1500) r.birthYear = 0;
+        if (typeof r.onceYear !== 'number' || r.onceYear < 1200 || r.onceYear > 1500) r.onceYear = 0;
         if (typeof r.note !== 'string') r.note = '';
         if (typeof r.active !== 'boolean') r.active = true;
         if (typeof r.lastFiredKey !== 'string') r.lastFiredKey = '';
@@ -2993,7 +3016,7 @@
             return ts;
         }
 
-        if (reminder.recurrence === 'yearly') {
+        if (reminder.recurrence === 'yearly' || reminder.recurrence === 'birthday') {
             const j = gregorianToJalali(from.getFullYear(), from.getMonth() + 1, from.getDate());
             if (!j) return null;
             const build = (year) => {
@@ -3006,6 +3029,16 @@
             let ts = build(j[0]);
             if (ts === null || ts < fromTs) ts = build(j[0] + 1);
             return ts;
+        }
+
+        if (reminder.recurrence === 'once') {
+            if (!reminder.onceYear) return null;
+            const maxDay = getJalaliMonthDays(reminder.onceYear, reminder.jMonth);
+            const day = Math.min(reminder.jDay, maxDay);
+            const g = jalaliToGregorian(reminder.onceYear, reminder.jMonth, day);
+            if (!g) return null;
+            const ts = new Date(g[0], g[1] - 1, g[2], hh, mm, 0, 0).getTime();
+            return ts >= fromTs ? ts : null;
         }
 
         return null;
@@ -3228,6 +3261,7 @@
 
             let matches = false;
             let key = '';
+            let notifBody = r.note || 'زمان یادآوری فرا رسید';
             const j = gregorianToJalali(now.getFullYear(), now.getMonth() + 1, now.getDate());
 
             if (r.recurrence === 'daily') {
@@ -3244,12 +3278,22 @@
                 const maxDay = getJalaliMonthDays(j[0], r.jMonth);
                 matches = j[1] === r.jMonth && j[2] === Math.min(r.jDay, maxDay);
                 key = String(j[0]);
+            } else if (r.recurrence === 'birthday' && j) {
+                const maxDay = getJalaliMonthDays(j[0], r.jMonth);
+                matches = j[1] === r.jMonth && j[2] === Math.min(r.jDay, maxDay);
+                key = String(j[0]);
+                if (matches && r.birthYear) {
+                    notifBody = `${toPersianNumber(j[0] - r.birthYear)} ساله شد 🎂` + (r.note ? ' · ' + r.note : '');
+                }
+            } else if (r.recurrence === 'once' && j) {
+                matches = r.onceYear === j[0] && r.jMonth === j[1] && r.jDay === j[2];
+                key = `${j[0]}-${j[1]}-${j[2]}`;
             }
 
             if (matches && r.lastFiredKey !== key) {
                 try {
-                    new Notification('🔔 ' + r.title, {
-                        body: r.note || 'زمان یادآوری فرا رسید',
+                    new Notification((r.recurrence === 'birthday' ? '🎂 ' : '🔔 ') + r.title, {
+                        body: notifBody,
                         tag: 'reminder-' + r.createdAt
                     });
                 } catch (e) { console.error('خطا در نمایش اعلان:', e); }
@@ -3286,21 +3330,50 @@
             const timeOnly = r.time;
             const fullNextText = (r.active && next) ? timestampToJalali(next) + ' - ' + toPersianNumber(new Date(next).toTimeString().slice(0, 5)) : null;
             const daysInfo = r.active ? formatDaysRemainingText(next) : null;
+            const hasStreak = REMINDER_STREAK_TYPES.includes(r.recurrence);
+            const isPastOnce = r.recurrence === 'once' && r.active && !next;
 
-            const streakInfo = computeReminderStreak(r);
-            const cycleLen = streakInfo.cycleLen;
-            const doneSet = new Set(r.doneLog || []);
-            const currentKey = getReminderPeriodKey(r);
-            const isCurrentDone = doneSet.has(currentKey);
+            let progressHtml = '';
+            let isCurrentDone = false;
+            if (hasStreak) {
+                const streakInfo = computeReminderStreak(r);
+                const cycleLen = streakInfo.cycleLen;
+                const doneSet = new Set(r.doneLog || []);
+                const currentKey = getReminderPeriodKey(r);
+                isCurrentDone = doneSet.has(currentKey);
 
-            const segCount = cycleLen;
-            const filledSegCount = streakInfo.currentInCycle;
-            let segHtml = '';
-            for (let i = 0; i < segCount; i++) {
-                segHtml += `<span class="seg ${i < filledSegCount ? 'filled' : ''}"></span>`;
+                let segHtml = '';
+                for (let i = 0; i < cycleLen; i++) {
+                    segHtml += `<span class="seg ${i < streakInfo.currentInCycle ? 'filled' : ''}"></span>`;
+                }
+                const badgeHtml = streakInfo.completedCycles > 0
+                    ? `<span class="reminder-streak-badge">🔥 ${toPersianNumber(streakInfo.completedCycles)} ${reminderCycleBadgeLabel(r.recurrence)}</span>`
+                    : '';
+                progressHtml = `
+                    <div class="reminder-progress">
+                        <div class="segmented-bar">${segHtml}</div>
+                        <span class="reminder-progress-label">${toPersianNumber(streakInfo.currentInCycle)}/${toPersianNumber(cycleLen)}</span>
+                        ${badgeHtml}
+                    </div>`;
+            } else if (r.recurrence === 'birthday' && r.birthYear && next) {
+                const j = gregorianToJalali(new Date(next).getFullYear(), new Date(next).getMonth() + 1, new Date(next).getDate());
+                const age = j ? j[0] - r.birthYear : null;
+                if (age) {
+                    progressHtml = `<div class="reminder-progress"><span class="reminder-streak-badge">🎂 ${toPersianNumber(age)} ساله می‌شه</span></div>`;
+                }
             }
-            const badgeHtml = streakInfo.completedCycles > 0
-                ? `<span class="reminder-streak-badge">🔥 ${toPersianNumber(streakInfo.completedCycles)} ${reminderCycleBadgeLabel(r.recurrence)}</span>`
+
+            let daysLeftHtml;
+            if (isPastOnce) {
+                daysLeftHtml = `<span class="reminder-days-left">${ICON_CALENDAR}این رویداد گذشت</span>`;
+            } else if (daysInfo) {
+                daysLeftHtml = `<span class="reminder-days-left ${daysInfo.today ? 'today' : ''}" title="${fullNextText || ''}">${ICON_CALENDAR}${daysInfo.text}</span>`;
+            } else {
+                daysLeftHtml = `<span class="reminder-days-left">${ICON_CALENDAR}غیرفعال</span>`;
+            }
+
+            const doneButtonHtml = hasStreak
+                ? `<button class="${isCurrentDone ? 'done-on' : ''}" data-action="done" data-index="${index}" title="${isCurrentDone ? 'انجام شد (لمس برای لغو)' : 'ثبت انجام این دوره'}">${ICON_CHECK}</button>`
                 : '';
 
             html += `
@@ -3316,20 +3389,14 @@
                                 <span class="reminder-title">${escapeHtml(r.title)}</span>
                                 <span class="reminder-time-inline">${ICON_CLOCK}${toPersianNumber(timeOnly || '--:--')}</span>
                             </div>
-                            <div class="reminder-progress">
-                                <div class="segmented-bar">${segHtml}</div>
-                                <span class="reminder-progress-label">${toPersianNumber(streakInfo.currentInCycle)}/${toPersianNumber(cycleLen)}</span>
-                                ${badgeHtml}
-                            </div>
+                            ${progressHtml}
                             <div class="reminder-bottom-row">
-                                ${daysInfo
-                                    ? `<span class="reminder-days-left ${daysInfo.today ? 'today' : ''}" title="${fullNextText || ''}">${ICON_CALENDAR}${daysInfo.text}</span>`
-                                    : `<span class="reminder-days-left">${ICON_CALENDAR}غیرفعال</span>`}
+                                ${daysLeftHtml}
                             </div>
                             ${r.note ? `<div class="reminder-note">${escapeHtml(r.note)}</div>` : ''}
                             <div class="reminder-actions">
                                 <button class="toggle-btn ${r.active ? 'toggle-on' : ''}" data-action="toggle" data-index="${index}" title="${r.active ? 'فعال (لمس برای غیرفعال کردن)' : 'غیرفعال (لمس برای فعال کردن)'}">${ICON_POWER}</button>
-                                <button class="${isCurrentDone ? 'done-on' : ''}" data-action="done" data-index="${index}" title="${isCurrentDone ? 'انجام شد (لمس برای لغو)' : 'ثبت انجام این دوره'}">${ICON_CHECK}</button>
+                                ${doneButtonHtml}
                             </div>
                         </div>
                     </div>
@@ -3510,7 +3577,9 @@
     function updateReminderFormUI(recurrence) {
         document.getElementById('reminderWeekdayGroup').classList.toggle('visible', recurrence === 'weekly');
         document.getElementById('reminderMonthDayGroup').classList.toggle('visible', recurrence === 'monthly');
-        document.getElementById('reminderYearlyGroup').classList.toggle('visible', recurrence === 'yearly');
+        document.getElementById('reminderYearlyGroup').classList.toggle('visible', recurrence === 'yearly' || recurrence === 'birthday');
+        document.getElementById('reminderBirthYearGroup').classList.toggle('visible', recurrence === 'birthday');
+        document.getElementById('reminderOnceGroup').classList.toggle('visible', recurrence === 'once');
     }
 
     function updateMonthDayHint() {
@@ -3549,6 +3618,10 @@
         document.getElementById('reminderMonthDayInput').value = r ? r.jDay : 1;
         document.getElementById('reminderYearMonthInput').value = r ? r.jMonth : 1;
         document.getElementById('reminderYearDayInput').value = r ? r.jDay : 1;
+        document.getElementById('reminderBirthYearInput').value = (r && r.birthYear) ? r.birthYear : '';
+        document.getElementById('reminderOnceYearInput').value = (r && r.onceYear) ? r.onceYear : '';
+        document.getElementById('reminderOnceMonthInput').value = r ? r.jMonth : 1;
+        document.getElementById('reminderOnceDayInput').value = r ? r.jDay : 1;
         document.getElementById('reminderTimeInput').value = r ? r.time : '09:00';
         document.getElementById('reminderNoteInput').value = r ? r.note : '';
 
@@ -3576,16 +3649,26 @@
         const activeChip = document.querySelector('#reminderWeekdayPicker .weekday-chip.active');
         const weekday = activeChip ? parseInt(activeChip.dataset.value) : 6;
 
-        let jDay = 1, jMonth = 1;
+        let jDay = 1, jMonth = 1, birthYear = 0, onceYear = 0;
         if (recurrence === 'monthly') {
             jDay = Math.min(31, Math.max(1, parseInt(document.getElementById('reminderMonthDayInput').value) || 1));
         } else if (recurrence === 'yearly') {
             jMonth = Math.min(12, Math.max(1, parseInt(document.getElementById('reminderYearMonthInput').value) || 1));
             jDay = Math.min(31, Math.max(1, parseInt(document.getElementById('reminderYearDayInput').value) || 1));
+        } else if (recurrence === 'birthday') {
+            jMonth = Math.min(12, Math.max(1, parseInt(document.getElementById('reminderYearMonthInput').value) || 1));
+            jDay = Math.min(31, Math.max(1, parseInt(document.getElementById('reminderYearDayInput').value) || 1));
+            const byInput = parseInt(document.getElementById('reminderBirthYearInput').value);
+            if (byInput && byInput >= 1200 && byInput <= 1500) birthYear = byInput;
+        } else if (recurrence === 'once') {
+            jMonth = Math.min(12, Math.max(1, parseInt(document.getElementById('reminderOnceMonthInput').value) || 1));
+            jDay = Math.min(31, Math.max(1, parseInt(document.getElementById('reminderOnceDayInput').value) || 1));
+            onceYear = parseInt(document.getElementById('reminderOnceYearInput').value) || 0;
+            if (!onceYear || onceYear < 1300 || onceYear > 1500) { showMessage('سال معتبر برای رویداد وارد کن', true); return; }
         }
 
         const reminderData = {
-            title, recurrence, time, weekday, jDay, jMonth, note,
+            title, recurrence, time, weekday, jDay, jMonth, birthYear, onceYear, note,
             active: true,
             lastFiredKey: ''
         };
