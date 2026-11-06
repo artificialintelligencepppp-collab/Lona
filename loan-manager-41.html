@@ -1390,6 +1390,8 @@
         .finance-entry-amount { font-weight: 600; font-size: 0.78rem; white-space: nowrap; }
         .finance-entry-amount.income { color: #5a9e44; }
         .finance-entry-amount.expense { color: #d4860a; }
+        .finance-entry-amount.transfer { color: #7aa7c7; }
+        .finance-tag.transfer { color: #7aa7c7; border: 1px solid #2e4a5e; background: rgba(122,167,199,0.08); }
         .finance-tag {
             font-size: 0.58rem;
             padding: 1px 8px;
@@ -1978,13 +1980,18 @@
             <select id="financeTypeInput">
                 <option value="expense">هزینه</option>
                 <option value="income">درآمد</option>
+                <option value="transfer">جابجایی بین حساب‌ها</option>
             </select>
         </div>
-        <div class="form-group"><label id="financeTitleLabel">نام هزینه</label><input type="text" id="financeTitleInput" maxlength="60"></div>
+        <div class="form-group" id="financeTitleGroup"><label id="financeTitleLabel">نام هزینه</label><input type="text" id="financeTitleInput" maxlength="60"></div>
         <div class="form-group"><label>مبلغ (تومان)</label><input type="text" inputmode="numeric" id="financeAmountInput"></div>
         <div class="form-group">
-            <label>نام بانک (اختیاری)</label>
+            <label id="financeBankLabel">نام بانک (اختیاری)</label>
             <input type="text" id="financeBankNameInput" list="bankNamesList" maxlength="60" placeholder="مثلاً ملت، سپه...">
+        </div>
+        <div class="form-group" id="financeToBankGroup" style="display:none;">
+            <label>به حساب (مقصد)</label>
+            <input type="text" id="financeToBankNameInput" list="bankNamesList" maxlength="60" placeholder="نام بانک مقصد — خالی بماند یعنی نقد">
         </div>
         <div class="form-group"><label>تاریخ (ش.م)</label><input type="text" id="financeDateInput" placeholder="۱۴۰۴/۰۱/۱۵"></div>
         <div class="form-group"><label>یادداشت (اختیاری)</label><textarea id="financeNoteInput" rows="2" maxlength="200"></textarea></div>
@@ -2769,8 +2776,10 @@
     // ========== درآمد و هزینه: داده و ذخیره‌سازی ==========
     function normalizeFinanceEntry(e) {
         if (!e || typeof e !== 'object') return null;
-        if (e.type !== 'income' && e.type !== 'expense') e.type = 'expense';
-        if (!e.title || typeof e.title !== 'string') e.title = (e.type === 'income') ? 'بدون منبع' : 'بدون عنوان';
+        if (e.type !== 'income' && e.type !== 'expense' && e.type !== 'transfer') e.type = 'expense';
+        if (!e.title || typeof e.title !== 'string') e.title = (e.type === 'income') ? 'بدون منبع' : (e.type === 'transfer' ? 'جابجایی بین حساب‌ها' : 'بدون عنوان');
+        if (typeof e.toBankName !== 'string' || e.type !== 'transfer') e.toBankName = '';
+        e.toBankName = normalizeBankName(e.toBankName);
         if (typeof e.amount !== 'number' || e.amount < 0) e.amount = 0;
         if (typeof e.date !== 'number') e.date = null;
         if (typeof e.note !== 'string') e.note = '';
@@ -2955,7 +2964,7 @@
     function getAllBankNames() {
         const set = new Set();
         cashEntries.forEach(c => { if (c.locationType === 'bank' && c.bankName) set.add(c.bankName); });
-        financeEntries.forEach(e => { if (e.bankName) set.add(e.bankName); });
+        financeEntries.forEach(e => { if (e.bankName) set.add(e.bankName); if (e.toBankName) set.add(e.toBankName); });
         return Array.from(set).sort((a, b) => a.localeCompare(b, 'fa'));
     }
 
@@ -2974,9 +2983,14 @@
     function getBankNetFlow(bankName) {
         let income = 0, expense = 0;
         financeEntries.forEach(entry => {
-            if ((entry.bankName || '') !== bankName) return;
             const key = getMonthKey(entry.date) || 'نامشخص';
             if (archivedMonths.includes(key)) return;
+            if (entry.type === 'transfer') {
+                if ((entry.bankName || '') === bankName) expense += entry.amount;
+                if ((entry.toBankName || '') === bankName) income += entry.amount;
+                return;
+            }
+            if ((entry.bankName || '') !== bankName) return;
             if (entry.type === 'income') income += entry.amount;
             else expense += entry.amount;
         });
@@ -3010,6 +3024,13 @@
     // sign = 1 برای اعمال اثر تراکنش، sign = -1 برای برگرداندن اثر قبلی (هنگام ویرایش/حذف)
     function applyFinanceEntryToCash(entry, sign) {
         if (!entry || !entry.amount) return;
+        if (entry.type === 'transfer') {
+            const from = findOrCreateCashTarget(entry.bankName || '');
+            const to = findOrCreateCashTarget(entry.toBankName || '');
+            from.amount = (from.amount || 0) - entry.amount * sign;
+            to.amount = (to.amount || 0) + entry.amount * sign;
+            return;
+        }
         const target = findOrCreateCashTarget(entry.bankName || '');
         const delta = (entry.type === 'income' ? 1 : -1) * (entry.amount || 0) * sign;
         target.amount = (target.amount || 0) + delta;
@@ -4806,6 +4827,7 @@
             if (typeof e.date !== 'number') return;
             const d = new Date(e.date);
             const key = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+            if (e.type === 'transfer') return;
             if (e.type === 'income') monthlyIncome[key] = (monthlyIncome[key] || 0) + (e.amount || 0);
             else monthlyExpense[key] = (monthlyExpense[key] || 0) + (e.amount || 0);
         });
@@ -5725,7 +5747,7 @@
             const key = getMonthKey(entry.date) || 'نامشخص';
             if (!groups[key]) groups[key] = { income: 0, expense: 0, entries: [] };
             if (entry.type === 'income') groups[key].income += entry.amount;
-            else groups[key].expense += entry.amount;
+            else if (entry.type === 'expense') groups[key].expense += entry.amount;
             groups[key].entries.push({ entry, index });
         });
 
@@ -5760,11 +5782,13 @@
                 entriesHtml = '<div class="finance-entries">' + group.entries.map(({ entry, index }) => `
                     <div class="finance-entry-item">
                         <div>
-                            <div><span class="finance-tag ${entry.type}">${entry.type === 'income' ? 'درآمد' : 'هزینه'}</span> <span class="finance-entry-title">${escapeHtml(entry.title)}</span>${entry.bankName ? ` <span class="finance-bank-tag">${ICON_BANK} ${escapeHtml(entry.bankName)}</span>` : ''}</div>
+                            <div><span class="finance-tag ${entry.type}">${entry.type === 'income' ? 'درآمد' : (entry.type === 'transfer' ? 'جابجایی' : 'هزینه')}</span> ${entry.type === 'transfer'
+                                ? `<span class="finance-entry-title">${escapeHtml(entry.bankName || 'نقد')} ← ${escapeHtml(entry.toBankName || 'نقد')}</span>${entry.title && entry.title !== 'جابجایی بین حساب‌ها' ? ' <span class="finance-bank-tag">' + escapeHtml(entry.title) + '</span>' : ''}`
+                                : `<span class="finance-entry-title">${escapeHtml(entry.title)}</span>${entry.bankName ? ` <span class="finance-bank-tag">${ICON_BANK} ${escapeHtml(entry.bankName)}</span>` : ''}`}</div>
                             <div class="finance-entry-meta">${entry.date ? timestampToJalali(entry.date) : '—'}${entry.note ? ' — ' + escapeHtml(entry.note) : ''}</div>
                         </div>
                         <div style="display:flex;align-items:center;gap:6px;">
-                            <span class="finance-entry-amount ${entry.type}">${entry.type === 'income' ? '+' : '−'}${formatCurrency(entry.amount)}</span>
+                            <span class="finance-entry-amount ${entry.type}">${entry.type === 'income' ? '+' : (entry.type === 'transfer' ? '⇄ ' : '−')}${formatCurrency(entry.amount)}</span>
                             <button class="finance-edit-btn" data-index="${index}">${ICON_EDIT}</button>
                             <button class="finance-del-btn" data-index="${index}">${ICON_TRASH}</button>
                         </div>
@@ -5889,23 +5913,33 @@
             const entry = financeEntries[editingFinanceIndex];
             title.textContent = 'ویرایش تراکنش';
             typeInput.value = entry.type;
-            titleLabel.textContent = entry.type === 'income' ? 'منبع دریافت' : 'نام هزینه';
             document.getElementById('financeTitleInput').value = entry.title || '';
             document.getElementById('financeAmountInput').value = entry.amount ? formatAmountInputValue(entry.amount) : '';
             document.getElementById('financeBankNameInput').value = entry.bankName || '';
+            document.getElementById('financeToBankNameInput').value = entry.toBankName || '';
             document.getElementById('financeDateInput').value = entry.date ? timestampToJalaliAscii(entry.date) : '';
             document.getElementById('financeNoteInput').value = entry.note || '';
         } else {
             title.textContent = 'افزودن تراکنش';
             typeInput.value = 'expense';
-            titleLabel.textContent = 'نام هزینه';
             document.getElementById('financeTitleInput').value = '';
             document.getElementById('financeAmountInput').value = '';
             document.getElementById('financeBankNameInput').value = '';
+            document.getElementById('financeToBankNameInput').value = '';
             document.getElementById('financeDateInput').value = timestampToJalaliAscii(Date.now());
             document.getElementById('financeNoteInput').value = '';
         }
+        updateFinanceFormForType();
         modal.classList.add('active');
+    }
+
+    function updateFinanceFormForType() {
+        const t = document.getElementById('financeTypeInput').value;
+        const isTransfer = t === 'transfer';
+        document.getElementById('financeTitleGroup').style.display = isTransfer ? 'none' : '';
+        document.getElementById('financeToBankGroup').style.display = isTransfer ? '' : 'none';
+        document.getElementById('financeTitleLabel').textContent = (t === 'income') ? 'منبع دریافت' : 'نام هزینه';
+        document.getElementById('financeBankLabel').textContent = isTransfer ? 'از حساب (مبدأ) — خالی بماند یعنی نقد' : 'نام بانک (اختیاری)';
     }
 
     function closeAddFinanceModal() {
@@ -5914,14 +5948,19 @@
     }
 
     function submitFinanceEntry() {
-        const type = document.getElementById('financeTypeInput').value === 'income' ? 'income' : 'expense';
-        const title = document.getElementById('financeTitleInput').value.trim();
+        const typeVal = document.getElementById('financeTypeInput').value;
+        const type = typeVal === 'income' ? 'income' : (typeVal === 'transfer' ? 'transfer' : 'expense');
+        let title = document.getElementById('financeTitleInput').value.trim();
+        const toBankName = type === 'transfer' ? normalizeBankName(document.getElementById('financeToBankNameInput').value).slice(0, 60) : '';
         const amount = parseAmountInput(document.getElementById('financeAmountInput').value);
         const bankName = normalizeBankName(document.getElementById('financeBankNameInput').value).slice(0, 60);
         const dateStr = document.getElementById('financeDateInput').value.trim();
         const note = document.getElementById('financeNoteInput').value.trim().slice(0, 200);
 
-        if (!title) { showMessage(type === 'income' ? 'منبع دریافت را وارد کنید' : 'نام هزینه را وارد کنید', true); return; }
+        if (type === 'transfer') {
+            title = (editingFinanceIndex !== null && financeEntries[editingFinanceIndex] && financeEntries[editingFinanceIndex].type === 'transfer' && financeEntries[editingFinanceIndex].title !== 'جابجایی بین حساب‌ها') ? financeEntries[editingFinanceIndex].title : 'جابجایی بین حساب‌ها';
+            if (bankName === toBankName) { showMessage('حساب مبدأ و مقصد نباید یکی باشند', true); return; }
+        } else if (!title) { showMessage(type === 'income' ? 'منبع دریافت را وارد کنید' : 'نام هزینه را وارد کنید', true); return; }
         if (!amount || amount <= 0) { showMessage('مبلغ معتبر وارد کنید', true); return; }
 
         let date = null;
@@ -5933,7 +5972,7 @@
         if (editingFinanceIndex !== null) {
             const oldEntry = financeEntries[editingFinanceIndex];
             applyFinanceEntryToCash(oldEntry, -1);
-            const updatedEntry = { ...oldEntry, type, title, amount, bankName, date, note };
+            const updatedEntry = { ...oldEntry, type, title, amount, bankName, toBankName, date, note };
             financeEntries[editingFinanceIndex] = updatedEntry;
             applyFinanceEntryToCash(updatedEntry, 1);
             saveFinance();
@@ -5941,7 +5980,7 @@
             closeAddFinanceModal();
             showMessage('تراکنش ویرایش و نقدینگی بروزرسانی شد');
         } else {
-            const newEntry = { type, title, amount, bankName, date, note, createdAt: Date.now() };
+            const newEntry = { type, title, amount, bankName, toBankName, date, note, createdAt: Date.now() };
             financeEntries.push(newEntry);
             applyFinanceEntryToCash(newEntry, 1);
             saveFinance();
@@ -6737,7 +6776,7 @@
         });
         document.getElementById('submitFinanceBtn').addEventListener('click', submitFinanceEntry);
         document.getElementById('financeTypeInput').addEventListener('change', function() {
-            document.getElementById('financeTitleLabel').textContent = (this.value === 'income') ? 'منبع دریافت' : 'نام هزینه';
+            updateFinanceFormForType();
         });
         document.querySelectorAll('[data-finance-filter]').forEach(tab => {
             tab.addEventListener('click', function() {
