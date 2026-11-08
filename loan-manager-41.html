@@ -1362,6 +1362,10 @@
         }
         .fm-income { color: #5a9e44; }
         .fm-expense { color: #d4860a; }
+        .fm-debt { color: #7aa7c7; }
+        .finance-tag.debtlink { color: #7aa7c7; border: 1px solid #2e4a5e; background: rgba(122,167,199,0.08); }
+        .finance-entry-amount.debtlink { color: #7aa7c7; }
+        .finance-entry-item.debt-virtual { opacity: 0.92; border-right: 2px solid #2e4a5e; }
         .fm-net.positive { color: #5a9e44; font-weight: 600; }
         .fm-net.negative { color: #d9564a; font-weight: 600; }
         .finance-expand-arrow {
@@ -1895,7 +1899,7 @@
             <button class="debt-tab active" data-filter="all">همه</button>
             <button class="debt-tab" data-filter="lent">طلب من</button>
             <button class="debt-tab" data-filter="borrowed">بدهی من</button>
-            <button class="debt-tab" data-filter="settled">تسویه‌شده</button>
+            <button class="debt-tab" data-filter="settled">آرشیو</button>
         </div>
 
         <div id="debtsList"></div>
@@ -1921,6 +1925,17 @@
         <div class="form-group"><label>تاریخ (ش.م)</label><input type="text" id="debtDateInput" placeholder="۱۴۰۴/۰۱/۱۵"></div>
         <div class="form-group"><label>سررسید (اختیاری)</label><input type="text" id="debtDueDateInput" placeholder="۱۴۰۴/۰۴/۱۵"></div>
         <div class="form-group"><label>یادداشت (اختیاری)</label><textarea id="debtNoteInput" rows="2" maxlength="200"></textarea></div>
+        <div class="form-group" style="border:1px dashed #2a2a28;padding:8px 10px;">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-bottom:8px;">
+                <input type="checkbox" id="debtApplyCashInput" checked style="width:auto;margin:0;">
+                <span id="debtApplyCashLabel">از نقدینگی کم شود</span>
+            </label>
+            <div id="debtBankGroup">
+                <label id="debtBankLabel" style="font-size:0.7rem;">از حساب (مبدأ) — خالی بماند یعنی نقد</label>
+                <input type="text" id="debtBankNameInput" list="bankNamesList" maxlength="60" placeholder="مثلاً مهر، بلوبانک...">
+                <div style="font-size:0.6rem;color:#7a7e70;margin-top:4px;">این مبلغ جزو درآمد یا هزینه حساب نمی‌شود، فقط موجودی حساب را عوض می‌کند.</div>
+            </div>
+        </div>
         <button class="submit-btn" id="submitDebtBtn">ثبت</button>
     </div>
 </div>
@@ -1940,6 +1955,17 @@
         <div class="form-group"><label id="paymentRemainingHint">مبلغ پرداخت‌شده (تومان)</label><input type="text" inputmode="numeric" id="paymentAmountInput"></div>
         <div class="form-group"><label>تاریخ پرداخت (ش.م)</label><input type="text" id="paymentDateInput" placeholder="۱۴۰۴/۰۱/۱۵"></div>
         <div class="form-group"><label>یادداشت (اختیاری)</label><input type="text" id="paymentNoteInput" maxlength="100"></div>
+        <div class="form-group" style="border:1px dashed #2a2a28;padding:8px 10px;">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-bottom:8px;">
+                <input type="checkbox" id="paymentApplyCashInput" checked style="width:auto;margin:0;">
+                <span id="paymentApplyCashLabel">به نقدینگی اضافه شود</span>
+            </label>
+            <div id="paymentBankGroup">
+                <label id="paymentBankLabel" style="font-size:0.7rem;">حساب مقصد — خالی بماند یعنی نقد</label>
+                <input type="text" id="paymentBankNameInput" list="bankNamesList" maxlength="60" placeholder="مثلاً مهر، بلوبانک...">
+                <div style="font-size:0.6rem;color:#7a7e70;margin-top:4px;">این مبلغ جزو درآمد یا هزینه حساب نمی‌شود، فقط موجودی حساب را عوض می‌کند.</div>
+            </div>
+        </div>
         <button class="submit-btn" id="submitPaymentBtn">ثبت پرداخت</button>
     </div>
 </div>
@@ -2722,13 +2748,17 @@
         if (typeof d.date !== 'number') d.date = null;
         if (typeof d.dueDate !== 'number') d.dueDate = null;
         if (typeof d.note !== 'string') d.note = '';
+        d.cashApplied = d.cashApplied === true;
+        d.cashBankName = (d.cashApplied && typeof d.cashBankName === 'string') ? normalizeBankName(d.cashBankName) : '';
         if (!Array.isArray(d.payments)) d.payments = [];
         d.payments = d.payments
             .filter(p => p && typeof p === 'object' && typeof p.amount === 'number' && p.amount > 0)
             .map(p => ({
                 amount: p.amount,
                 date: typeof p.date === 'number' ? p.date : Date.now(),
-                note: typeof p.note === 'string' ? p.note : ''
+                note: typeof p.note === 'string' ? p.note : '',
+                cashApplied: p.cashApplied === true,
+                bankName: (p.cashApplied === true && typeof p.bankName === 'string') ? normalizeBankName(p.bankName) : ''
             }));
         if (!d.createdAt || typeof d.createdAt !== 'number') d.createdAt = Date.now();
         return d;
@@ -5401,9 +5431,13 @@
 
         let list = debts.map((debt, index) => ({ debt, index }));
 
-        if (debtFilter === 'lent') list = list.filter(({ debt }) => debt.direction === 'lent');
-        else if (debtFilter === 'borrowed') list = list.filter(({ debt }) => debt.direction === 'borrowed');
-        else if (debtFilter === 'settled') list = list.filter(({ debt }) => isDebtSettled(debt));
+        // موارد تسویه‌شده خودکار به آرشیو می‌روند و در بقیه‌ی تب‌ها نمایش داده نمی‌شوند
+        if (debtFilter === 'settled') list = list.filter(({ debt }) => isDebtSettled(debt));
+        else {
+            list = list.filter(({ debt }) => !isDebtSettled(debt));
+            if (debtFilter === 'lent') list = list.filter(({ debt }) => debt.direction === 'lent');
+            else if (debtFilter === 'borrowed') list = list.filter(({ debt }) => debt.direction === 'borrowed');
+        }
 
         list.sort((a, b) => {
             const aSettled = isDebtSettled(a.debt);
@@ -5416,7 +5450,7 @@
         });
 
         if (!list.length) {
-            const msg = debts.length ? '[ موردی در این فیلتر یافت نشد ]' : '[ هنوز قرض یا بدهی ثبت نشده ]';
+            const msg = debts.length ? (debtFilter === 'settled' ? '[ هنوز مورد تسویه‌شده‌ای در آرشیو نیست ]' : '[ موردی در این فیلتر یافت نشد ]') : '[ هنوز قرض یا بدهی ثبت نشده ]';
             container.innerHTML = `<div class="debts-empty">${msg}</div>`;
             return;
         }
@@ -5515,8 +5549,12 @@
             document.getElementById('debtDateInput').value = debt.date ? timestampToJalaliAscii(debt.date) : '';
             document.getElementById('debtDueDateInput').value = debt.dueDate ? timestampToJalaliAscii(debt.dueDate) : '';
             document.getElementById('debtNoteInput').value = debt.note || '';
+            document.getElementById('debtApplyCashInput').checked = debt.cashApplied === true;
+            document.getElementById('debtBankNameInput').value = debt.cashBankName || '';
         } else {
             title.textContent = 'افزودن قرض / بدهی';
+            document.getElementById('debtApplyCashInput').checked = true;
+            document.getElementById('debtBankNameInput').value = '';
             document.getElementById('debtPersonInput').value = '';
             document.getElementById('debtDirectionInput').value = 'lent';
             document.getElementById('debtAmountInput').value = '';
@@ -5524,7 +5562,24 @@
             document.getElementById('debtDueDateInput').value = '';
             document.getElementById('debtNoteInput').value = '';
         }
+        updateDebtCashForm();
         modal.classList.add('active');
+    }
+
+    function updateDebtCashForm() {
+        const isLent = document.getElementById('debtDirectionInput').value !== 'borrowed';
+        const on = document.getElementById('debtApplyCashInput').checked;
+        document.getElementById('debtApplyCashLabel').textContent = isLent ? 'از نقدینگی کم شود (پول را به او دادم)' : 'به نقدینگی اضافه شود (پول را از او گرفتم)';
+        document.getElementById('debtBankLabel').textContent = isLent ? 'از حساب (مبدأ) — خالی بماند یعنی نقد' : 'به حساب (مقصد) — خالی بماند یعنی نقد';
+        document.getElementById('debtBankGroup').style.display = on ? '' : 'none';
+    }
+
+    // اثر مبلغ اصلی قرض/بدهی روی نقدینگی: طلب = خروج پول، بدهی = ورود پول (sign=1 اعمال، -1 برگرداندن)
+    function applyDebtPrincipalToCash(debt, sign) {
+        if (!debt || debt.cashApplied !== true || !debt.amount) return;
+        const target = findOrCreateCashTarget(debt.cashBankName || '');
+        const dir = debt.direction === 'lent' ? -1 : 1;
+        target.amount = (target.amount || 0) + dir * debt.amount * sign;
     }
 
     function closeAddDebtModal() {
@@ -5554,16 +5609,26 @@
             if (dueDate === null) { showMessage('تاریخ سررسید نامعتبر است', true); return; }
         }
 
+        const applyCash = document.getElementById('debtApplyCashInput').checked;
+        const cashBankName = applyCash ? normalizeBankName(document.getElementById('debtBankNameInput').value).slice(0, 60) : '';
+
         if (editingDebtIndex !== null) {
-            debts[editingDebtIndex] = { ...debts[editingDebtIndex], person, direction, amount, date, dueDate, note };
+            const oldDebt = debts[editingDebtIndex];
+            applyDebtPrincipalToCash(oldDebt, -1);
+            const updated = { ...oldDebt, person, direction, amount, date, dueDate, note, cashApplied: applyCash, cashBankName };
+            debts[editingDebtIndex] = updated;
+            applyDebtPrincipalToCash(updated, 1);
+            saveCash();
             saveDebts();
             closeAddDebtModal();
             showMessage(`اطلاعات «${person}» ویرایش شد`);
         } else {
-            debts.push({ person, direction, amount, date, dueDate, note, payments: [], createdAt: Date.now() });
+            const newDebt = { person, direction, amount, date, dueDate, note, payments: [], createdAt: Date.now(), cashApplied: applyCash, cashBankName };
+            debts.push(newDebt);
+            if (applyCash) { applyDebtPrincipalToCash(newDebt, 1); saveCash(); }
             saveDebts();
             closeAddDebtModal();
-            showMessage(`«${person}» با موفقیت ثبت شد`);
+            showMessage(`«${person}» با موفقیت ثبت شد` + (applyCash ? (direction === 'lent' ? ' و از نقدینگی کم شد' : ' و به نقدینگی اضافه شد') : ''));
         }
     }
 
@@ -5584,7 +5649,7 @@
                 <div class="payment-item">
                     <div>
                         <div class="payment-amount">${formatCurrency(p.amount)} تومان</div>
-                        <div class="payment-date">${timestampToJalali(p.date)}${p.note ? ' — ' + escapeHtml(p.note) : ''}</div>
+                        <div class="payment-date">${timestampToJalali(p.date)}${p.cashApplied ? ' — ' + (debt.direction === 'lent' ? 'به ' : 'از ') + escapeHtml(p.bankName || 'نقد') : ''}${p.note ? ' — ' + escapeHtml(p.note) : ''}</div>
                     </div>
                     <button class="payment-del-btn" data-debt-index="${index}" data-payment-index="${pIndex}">${ICON_TRASH}</button>
                 </div>
@@ -5682,7 +5747,22 @@
         document.getElementById('paymentDateInput').value = timestampToJalaliAscii(Date.now());
         document.getElementById('paymentNoteInput').value = '';
         document.getElementById('paymentRemainingHint').textContent = `مبلغ پرداخت‌شده (باقی‌مانده: ${formatCurrency(remaining)} تومان)`;
+        const isLent = debt.direction === 'lent';
+        document.getElementById('paymentApplyCashInput').checked = true;
+        document.getElementById('paymentApplyCashLabel').textContent = isLent ? 'به نقدینگی اضافه شود (طلب را پس گرفتم)' : 'از نقدینگی کم شود (بدهی را پرداختم)';
+        document.getElementById('paymentBankLabel').textContent = isLent ? 'به حساب (مقصد) — خالی بماند یعنی نقد' : 'از حساب (مبدأ) — خالی بماند یعنی نقد';
+        document.getElementById('paymentBankNameInput').value = '';
+        document.getElementById('paymentBankGroup').style.display = '';
         document.getElementById('addPaymentModal').classList.add('active');
+    }
+
+    // اثر پرداخت قرض/طلب روی نقدینگی (بدون ثبت در درآمد و هزینه)
+    // sign = 1 اعمال، sign = -1 برگرداندن
+    function applyDebtPaymentToCash(debt, payment, sign) {
+        if (!debt || !payment || payment.cashApplied !== true || !payment.amount) return;
+        const target = findOrCreateCashTarget(payment.bankName || '');
+        const dir = debt.direction === 'lent' ? 1 : -1;
+        target.amount = (target.amount || 0) + dir * payment.amount * sign;
     }
 
     function closeAddPaymentModal() {
@@ -5708,10 +5788,15 @@
             date = ts;
         }
 
-        debt.payments.push({ amount, date, note });
+        const applyCash = document.getElementById('paymentApplyCashInput').checked;
+        const bankName = applyCash ? normalizeBankName(document.getElementById('paymentBankNameInput').value).slice(0, 60) : '';
+        const payment = { amount, date, note, cashApplied: applyCash, bankName };
+        debt.payments.push(payment);
+        if (applyCash) { applyDebtPaymentToCash(debt, payment, 1); saveCash(); }
         saveDebts();
         closeAddPaymentModal();
-        showMessage(isDebtSettled(debt) ? 'پرداخت ثبت شد و به‌طور کامل تسویه شد' : 'پرداخت با موفقیت ثبت شد');
+        const cashMsg = applyCash ? (debt.direction === 'lent' ? ' و به نقدینگی اضافه شد' : ' و از نقدینگی کم شد') : '';
+        showMessage((isDebtSettled(debt) ? 'پرداخت ثبت شد و به‌طور کامل تسویه شد' : 'پرداخت با موفقیت ثبت شد') + cashMsg);
 
         if (document.getElementById('debtDetailModal').classList.contains('active')) {
             openDebtDetail(idx);
@@ -5721,7 +5806,10 @@
     function deletePayment(debtIndex, paymentIndex) {
         const debt = debts[debtIndex];
         if (!debt || !debt.payments || !debt.payments[paymentIndex]) return;
-        if (!confirm('این پرداخت حذف شود؟')) return;
+        const pay = debt.payments[paymentIndex];
+        const hasCash = pay.cashApplied === true;
+        if (!confirm(hasCash ? 'این پرداخت حذف شود؟ اثرش روی نقدینگی هم برگردانده می‌شود.' : 'این پرداخت حذف شود؟')) return;
+        if (hasCash) { applyDebtPaymentToCash(debt, pay, -1); saveCash(); }
         debt.payments.splice(paymentIndex, 1);
         saveDebts();
         openDebtDetail(debtIndex);
@@ -5731,10 +5819,44 @@
         const debt = debts[index];
         if (!debt) return;
         if (!confirm(`آیا از حذف رکورد «${debt.person}» مطمئن هستید؟ این عملیات قابل بازگشت نیست.`)) return;
+        const hasCashEffect = debt.cashApplied === true || (debt.payments || []).some(p => p.cashApplied === true);
+        if (hasCashEffect && confirm('این رکورد روی نقدینگی اثر گذاشته است.\n\nOK = اثرش (مبلغ اصلی و پرداخت‌ها) از نقدینگی برگردانده شود، مثل اینکه اشتباهی ثبت شده بود.\nCancel = نقدینگی دست‌نخورده بماند، مثل پاک‌سازی یک رکورد تسویه‌شده.')) {
+            (debt.payments || []).forEach(pay => applyDebtPaymentToCash(debt, pay, -1));
+            applyDebtPrincipalToCash(debt, -1);
+            saveCash();
+        }
         debts.splice(index, 1);
         saveDebts();
         closeDebtDetail();
         showMessage('رکورد حذف شد');
+    }
+
+    // ========== بستانکاری و بدهی در بخش درآمد و هزینه (فقط نمایش؛ جزو آمار درآمد/هزینه نیست) ==========
+    // flow = +1 یعنی پول وارد دست من شده، -1 یعنی از دست من خارج شده
+    function buildDebtFlowEntries() {
+        const list = [];
+        debts.forEach(d => {
+            const isLent = d.direction === 'lent';
+            const tag = isLent ? 'بستانکاری' : 'بدهی';
+            const settled = isDebtSettled(d);
+            list.push({
+                virtual: true, settled, tag, date: d.date, amount: d.amount || 0,
+                flow: isLent ? -1 : 1,
+                title: isLent ? `قرض دادن به ${d.person}` : `قرض گرفتن از ${d.person}`,
+                bankName: d.cashApplied ? (d.cashBankName || 'نقد') : '',
+                note: d.note || ''
+            });
+            (d.payments || []).forEach(pay => {
+                list.push({
+                    virtual: true, settled, tag, date: pay.date, amount: pay.amount || 0,
+                    flow: isLent ? 1 : -1,
+                    title: isLent ? `دریافت از ${d.person}` : `پرداخت به ${d.person}`,
+                    bankName: pay.cashApplied ? (pay.bankName || 'نقد') : '',
+                    note: pay.note || ''
+                });
+            });
+        });
+        return list;
     }
 
     // ========== درآمد و هزینه: رابط کاربری ==========
@@ -5745,20 +5867,31 @@
         const groups = {};
         financeEntries.forEach((entry, index) => {
             const key = getMonthKey(entry.date) || 'نامشخص';
-            if (!groups[key]) groups[key] = { income: 0, expense: 0, entries: [] };
+            if (!groups[key]) groups[key] = { income: 0, expense: 0, debtIn: 0, debtOut: 0, entries: [] };
             if (entry.type === 'income') groups[key].income += entry.amount;
             else if (entry.type === 'expense') groups[key].expense += entry.amount;
             groups[key].entries.push({ entry, index });
         });
+        // بستانکاری/بدهی‌های تسویه‌شده (مبلغ اصلی و پرداخت‌ها) خودکار به آرشیو می‌روند
+        buildDebtFlowEntries().forEach(v => {
+            const baseKey = getMonthKey(v.date) || 'نامشخص';
+            const key = (v.settled && !archivedMonths.includes(baseKey)) ? baseKey + '#settled' : baseKey;
+            if (!groups[key]) groups[key] = { income: 0, expense: 0, debtIn: 0, debtOut: 0, entries: [], pseudo: key !== baseKey };
+            if (v.flow > 0) groups[key].debtIn += v.amount; else groups[key].debtOut += v.amount;
+            groups[key].entries.push({ entry: v, index: -1 });
+        });
 
+        const baseOf = k => k.replace('#settled', '');
         let keys = Object.keys(groups);
-        if (financeFilter === 'active') keys = keys.filter(k => !archivedMonths.includes(k));
-        else keys = keys.filter(k => archivedMonths.includes(k));
+        if (financeFilter === 'active') keys = keys.filter(k => !groups[k].pseudo && !archivedMonths.includes(k));
+        else keys = keys.filter(k => groups[k].pseudo || archivedMonths.includes(k));
 
         keys.sort((a, b) => {
-            if (a === 'نامشخص') return 1;
-            if (b === 'نامشخص') return -1;
-            return b.localeCompare(a);
+            const ba = baseOf(a), bb = baseOf(b);
+            if (ba === 'نامشخص' && bb !== 'نامشخص') return 1;
+            if (bb === 'نامشخص' && ba !== 'نامشخص') return -1;
+            if (ba !== bb) return bb.localeCompare(ba);
+            return (groups[a].pseudo ? 1 : 0) - (groups[b].pseudo ? 1 : 0);
         });
 
         if (!keys.length) {
@@ -5771,7 +5904,8 @@
         keys.forEach(key => {
             const group = groups[key];
             const net = group.income - group.expense;
-            const label = (key === 'نامشخص') ? 'بدون تاریخ' : monthKeyLabel(key);
+            const baseKey = baseOf(key);
+            const label = ((baseKey === 'نامشخص') ? 'بدون تاریخ' : monthKeyLabel(baseKey)) + (group.pseudo ? ' — بستانکاری/بدهی تسویه‌شده' : '');
             const isExpanded = expandedMonthKey === key;
             const isArchived = archivedMonths.includes(key);
 
@@ -5779,7 +5913,17 @@
 
             let entriesHtml = '';
             if (isExpanded) {
-                entriesHtml = '<div class="finance-entries">' + group.entries.map(({ entry, index }) => `
+                entriesHtml = '<div class="finance-entries">' + group.entries.map(({ entry, index }) => entry.virtual ? `
+                    <div class="finance-entry-item debt-virtual">
+                        <div>
+                            <div><span class="finance-tag debtlink">${entry.tag}</span> <span class="finance-entry-title">${escapeHtml(entry.title)}</span>${entry.bankName ? ` <span class="finance-bank-tag">${ICON_BANK} ${escapeHtml(entry.bankName)}</span>` : ''}</div>
+                            <div class="finance-entry-meta">${entry.date ? timestampToJalali(entry.date) : '—'}${entry.note ? ' — ' + escapeHtml(entry.note) : ''} — از بخش قرض و بدهی</div>
+                        </div>
+                        <div style="display:flex;align-items:center;gap:6px;">
+                            <span class="finance-entry-amount debtlink">${entry.flow > 0 ? '+' : '−'}${formatCurrency(entry.amount)}</span>
+                        </div>
+                    </div>
+                ` : `
                     <div class="finance-entry-item">
                         <div>
                             <div><span class="finance-tag ${entry.type}">${entry.type === 'income' ? 'درآمد' : (entry.type === 'transfer' ? 'جابجایی' : 'هزینه')}</span> ${entry.type === 'transfer'
@@ -5801,16 +5945,17 @@
                     <div class="finance-month-header" data-key="${key}">
                         <div>
                             <div class="finance-month-title">${label}</div>
-                            <div class="finance-month-totals">
+                            ${group.pseudo ? '' : `<div class="finance-month-totals">
                                 <span class="fm-income">+${formatCurrency(group.income)}</span>
                                 <span class="fm-expense">−${formatCurrency(group.expense)}</span>
                                 <span class="fm-net ${net >= 0 ? 'positive' : 'negative'}">خالص: ${net >= 0 ? '+' : '−'}${formatCurrency(Math.abs(net))}</span>
-                            </div>
+                            </div>`}
+                            ${(group.debtIn || group.debtOut) ? `<div class="finance-month-totals"><span class="fm-debt">بستانکاری/بدهی (جدا از آمار): ورود +${formatCurrency(group.debtIn)} · خروج −${formatCurrency(group.debtOut)}</span></div>` : ''}
                         </div>
                         <div style="display:flex;align-items:center;gap:4px;">
-                            <button class="icon-btn finance-archive-toggle" data-key="${key}" title="${isArchived ? 'خارج کردن از آرشیو' : 'آرشیو این ماه'}" style="width:32px;height:32px;">
+                            ${group.pseudo ? '' : `<button class="icon-btn finance-archive-toggle" data-key="${key}" title="${isArchived ? 'خارج کردن از آرشیو' : 'آرشیو این ماه'}" style="width:32px;height:32px;">
                                 ${ICON_ARCHIVE}
-                            </button>
+                            </button>`}
                             <span class="finance-expand-arrow ${isExpanded ? 'open' : ''}">▾</span>
                         </div>
                     </div>
@@ -5862,6 +6007,12 @@
             if (archivedMonths.includes(key)) return s;
             return entry.type === 'expense' ? s + entry.amount : s;
         }, 0);
+        let debtIn = 0, debtOut = 0;
+        buildDebtFlowEntries().forEach(v => {
+            const key = getMonthKey(v.date) || 'نامشخص';
+            if (archivedMonths.includes(key) || v.settled) return;
+            if (v.flow > 0) debtIn += v.amount; else debtOut += v.amount;
+        });
         const net = computeActiveNetBalance();
         el.innerHTML = `
             <div class="detail-info-item">
@@ -5871,6 +6022,10 @@
             <div class="detail-info-item">
                 <span class="label">مجموع هزینه (ماه‌های فعال)</span>
                 <span class="value yellow">${formatCurrency(totalExpense)} تومان</span>
+            </div>
+            <div class="detail-info-item" style="grid-column:1 / -1;">
+                <span class="label">بستانکاری و بدهی (ماه‌های فعال) <span style="font-size:0.55rem;color:#7a7e70;">(جدا از درآمد و هزینه)</span></span>
+                <span class="value" style="color:#7aa7c7;">ورود +${formatCurrency(debtIn)} · خروج −${formatCurrency(debtOut)} تومان</span>
             </div>
             <div class="detail-info-item" style="grid-column:1 / -1;">
                 <span class="label">مانده‌ی خالص <span style="font-size:0.55rem;color:#7a7e70;">(بر اساس مجموع نقدینگی)</span></span>
@@ -6754,7 +6909,12 @@
         document.getElementById('addPaymentModal').addEventListener('click', function(e) {
             if (e.target === this) closeAddPaymentModal();
         });
+        document.getElementById('paymentApplyCashInput').addEventListener('change', function() {
+            document.getElementById('paymentBankGroup').style.display = this.checked ? '' : 'none';
+        });
         document.getElementById('submitPaymentBtn').addEventListener('click', submitPayment);
+        document.getElementById('debtApplyCashInput').addEventListener('change', updateDebtCashForm);
+        document.getElementById('debtDirectionInput').addEventListener('change', updateDebtCashForm);
         document.querySelectorAll('.debt-tab').forEach(tab => {
             tab.addEventListener('click', function() {
                 debtFilter = this.dataset.filter;
