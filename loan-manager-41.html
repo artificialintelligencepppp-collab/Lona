@@ -1395,6 +1395,9 @@
         .finance-entry-amount.income { color: #5a9e44; }
         .finance-entry-amount.expense { color: #d4860a; }
         .finance-entry-amount.transfer { color: #7aa7c7; }
+        .finance-entry-amount.support { color: #6fb7a0; }
+        .finance-tag.support { color: #6fb7a0; border: 1px solid #2e5a4c; background: rgba(111,183,160,0.08); }
+        .fm-support { color: #6fb7a0; }
         .finance-tag.transfer { color: #7aa7c7; border: 1px solid #2e4a5e; background: rgba(122,167,199,0.08); }
         .finance-tag {
             font-size: 0.58rem;
@@ -2007,6 +2010,7 @@
                 <option value="expense">هزینه</option>
                 <option value="income">درآمد</option>
                 <option value="transfer">جابجایی بین حساب‌ها</option>
+                <option value="support">دریافت برای قسط</option>
             </select>
         </div>
         <div class="form-group" id="financeTitleGroup"><label id="financeTitleLabel">نام هزینه</label><input type="text" id="financeTitleInput" maxlength="60"></div>
@@ -2014,6 +2018,10 @@
         <div class="form-group">
             <label id="financeBankLabel">نام بانک (اختیاری)</label>
             <input type="text" id="financeBankNameInput" list="bankNamesList" maxlength="60" placeholder="مثلاً ملت، سپه...">
+        </div>
+        <div class="form-group" id="financeLoanGroup" style="display:none;">
+            <label>برای کدام وام؟ (اختیاری)</label>
+            <select id="financeLoanInput"></select>
         </div>
         <div class="form-group" id="financeToBankGroup" style="display:none;">
             <label>به حساب (مقصد)</label>
@@ -2806,8 +2814,9 @@
     // ========== درآمد و هزینه: داده و ذخیره‌سازی ==========
     function normalizeFinanceEntry(e) {
         if (!e || typeof e !== 'object') return null;
-        if (e.type !== 'income' && e.type !== 'expense' && e.type !== 'transfer') e.type = 'expense';
-        if (!e.title || typeof e.title !== 'string') e.title = (e.type === 'income') ? 'بدون منبع' : (e.type === 'transfer' ? 'جابجایی بین حساب‌ها' : 'بدون عنوان');
+        if (e.type !== 'income' && e.type !== 'expense' && e.type !== 'transfer' && e.type !== 'support') e.type = 'expense';
+        e.loanId = (e.type === 'support' && typeof e.loanId === 'number') ? e.loanId : null;
+        if (!e.title || typeof e.title !== 'string') e.title = (e.type === 'income' || e.type === 'support') ? 'بدون منبع' : (e.type === 'transfer' ? 'جابجایی بین حساب‌ها' : 'بدون عنوان');
         if (typeof e.toBankName !== 'string' || e.type !== 'transfer') e.toBankName = '';
         e.toBankName = normalizeBankName(e.toBankName);
         if (typeof e.amount !== 'number' || e.amount < 0) e.amount = 0;
@@ -3021,7 +3030,7 @@
                 return;
             }
             if ((entry.bankName || '') !== bankName) return;
-            if (entry.type === 'income') income += entry.amount;
+            if (entry.type === 'income' || entry.type === 'support') income += entry.amount;
             else expense += entry.amount;
         });
         return income - expense;
@@ -3062,7 +3071,7 @@
             return;
         }
         const target = findOrCreateCashTarget(entry.bankName || '');
-        const delta = (entry.type === 'income' ? 1 : -1) * (entry.amount || 0) * sign;
+        const delta = ((entry.type === 'income' || entry.type === 'support') ? 1 : -1) * (entry.amount || 0) * sign;
         target.amount = (target.amount || 0) + delta;
     }
 
@@ -4561,6 +4570,20 @@
                 </div>
             </div>
 
+            ${(() => {
+                const sup = getSupportEntriesForLoan(loan);
+                if (!sup.length) return '';
+                const total = sup.reduce((a, e) => a + (e.amount || 0), 0);
+                const bySender = {};
+                sup.forEach(e => { bySender[e.title] = (bySender[e.title] || 0) + (e.amount || 0); });
+                const parts = Object.keys(bySender).map(k => `${escapeHtml(k)}: ${formatCurrency(bySender[k])}`).join(' · ');
+                return `<div style="margin-bottom:12px;padding:8px 10px;border:1px solid #2e5a4c;background:rgba(111,183,160,0.06);font-size:0.75rem;color:#b0b4a8;">
+                    <span style="color:#6fb7a0;font-size:0.65rem;display:block;margin-bottom:2px;">دریافت برای قسط این وام — جدا از درآمد</span>
+                    <b style="color:#6fb7a0;">${formatCurrency(total)} تومان</b> در ${toPersianNumber(sup.length)} نوبت<br>
+                    <span style="font-size:0.68rem;">${parts}</span>
+                </div>`;
+            })()}
+
             <div class="installment-list">
                 <span class="installment-label">▸ لیست اقساط (برای تغییر وضعیت کلیک کنید)</span>
                 ${instHtml}
@@ -4857,7 +4880,7 @@
             if (typeof e.date !== 'number') return;
             const d = new Date(e.date);
             const key = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
-            if (e.type === 'transfer') return;
+            if (e.type !== 'income' && e.type !== 'expense') return;
             if (e.type === 'income') monthlyIncome[key] = (monthlyIncome[key] || 0) + (e.amount || 0);
             else monthlyExpense[key] = (monthlyExpense[key] || 0) + (e.amount || 0);
         });
@@ -5089,7 +5112,7 @@
 
         // ---------- ۱) وام‌ها ----------
         const activeLoans = loans.filter(l => !l.archived);
-        let allPaidSum = 0, allRemSum = 0, allMonthly = 0, hasFee = false;
+        let allPaidSum = 0, allRemSum = 0, allMonthly = 0, hasFee = false, allSupportOnLoans = 0;
         const dueDay = ts => {
             const a = timestampToJalaliAscii(ts) || '';
             const parts = a.split('/');
@@ -5117,6 +5140,9 @@
             const day = dates.length ? dueDay(dates[0]) : '—';
             const nextTs = getNextDueTimestamp(loan);
             const nextStr = (nextTs && nextTs !== Infinity) ? timestampToJalali(nextTs) : 'تسویه‌شده';
+            const supList = getSupportEntriesForLoan(loan);
+            const supSum = supList.reduce((a, e) => a + (e.amount || 0), 0);
+            allSupportOnLoans += supSum;
             return `<tr class="${remCnt === 0 ? 'rpt-paid' : (lateCnt ? 'rpt-late' : '')}">
                 <td class="r-name">${escapeHtml(loan.name || 'بدون نام')}<br><span style="font-size:8.5px;color:#555;">${f.type === 'qarz' ? 'قرض‌الحسنه' : 'عادی'}${lateCnt ? ' · ' + toPersianNumber(lateCnt) + ' قسط معوق' : ''}</span></td>
                 <td>${money(loan.amount)}</td>
@@ -5128,6 +5154,7 @@
                 <td>${money(f.installmentAmount)}${day !== '—' ? '<br><span style="font-size:8.5px;color:#555;">هر ماه روز ' + day + '</span>' : ''}</td>
                 <td>${nextStr}</td>
                 <td>${money(remSum)}</td>
+                <td>${supSum ? money(supSum) : '—'}</td>
             </tr>`;
         }).join('');
 
@@ -5135,10 +5162,10 @@
             ? `<table class="rpt-loans">
                 <thead><tr>
                     <th>نام وام</th><th>مبلغ وام</th><th>تعداد اقساط</th><th>پرداخت‌شده</th><th>باقی‌مانده</th>
-                    <th>اولین قسط</th><th>آخرین قسط</th><th>قسط ماهانه</th><th>سررسید بعدی</th><th>مانده‌ی بدهی (تومان)</th>
+                    <th>اولین قسط</th><th>آخرین قسط</th><th>قسط ماهانه</th><th>سررسید بعدی</th><th>مانده‌ی بدهی (تومان)</th><th>دریافت برای قسط</th>
                 </tr></thead>
                 <tbody>${loanRows}
-                    <tr class="rpt-total"><td class="r-name" colspan="7">جمع کل وام‌ها</td><td>${money(allMonthly)}</td><td></td><td>${money(allRemSum)}</td></tr>
+                    <tr class="rpt-total"><td class="r-name" colspan="7">جمع کل وام‌ها</td><td>${money(allMonthly)}</td><td></td><td>${money(allRemSum)}</td><td>${allSupportOnLoans ? money(allSupportOnLoans) : '—'}</td></tr>
                 </tbody>
                </table>
                <div style="font-size:9px;color:#555;margin-top:3px;">قسط ماهانه‌ی جمع، مجموع اقساط وام‌هایی است که هنوز قسط باقی‌مانده دارند. ردیف سبز: تسویه‌شده · ردیف قرمز: دارای قسط معوق${hasFee ? ' · مانده‌ی بدهی شامل اقساط کارمزد سالانه است' : ''}.</div>`
@@ -5228,6 +5255,34 @@
                </table>`
             : '<div class="rpt-empty">نقدینگی‌ای ثبت نشده است</div>';
 
+        // ---------- دریافتی‌ها برای اقساط ----------
+        const supEntries = financeEntries.filter(e => e.type === 'support');
+        let supportSection = '';
+        if (supEntries.length) {
+            const by = {};
+            supEntries.forEach(e => {
+                const k = e.title || 'نامشخص';
+                if (!by[k]) by[k] = { n: 0, sum: 0, loans: {} };
+                by[k].n++; by[k].sum += e.amount || 0;
+                const ln = getLoanNameById(e.loanId) || 'بدون ارتباط با وام';
+                by[k].loans[ln] = (by[k].loans[ln] || 0) + (e.amount || 0);
+            });
+            let supTotal = 0, supCount = 0;
+            const supRows = Object.keys(by).sort((a, b) => by[b].sum - by[a].sum).map(k => {
+                supTotal += by[k].sum; supCount += by[k].n;
+                const loansTxt = Object.keys(by[k].loans).map(n => escapeHtml(n) + ': ' + money(by[k].loans[n])).join(' · ');
+                return `<tr><td class="r-name">${escapeHtml(k)}</td><td>${toPersianNumber(by[k].n)}</td><td>${money(by[k].sum)}</td><td class="r-name" style="font-size:9px;">${loansTxt}</td></tr>`;
+            }).join('');
+            supportSection = `
+            <div class="rpt-sec">
+                <h2>۵. دریافتی‌ها برای اقساط (جدا از درآمد)</h2>
+                <table>
+                    <thead><tr><th>فرستنده</th><th>تعداد دفعات</th><th>جمع مبلغ (تومان)</th><th>به تفکیک وام</th></tr></thead>
+                    <tbody>${supRows}<tr class="rpt-total"><td class="r-name">جمع کل</td><td>${toPersianNumber(supCount)}</td><td>${money(supTotal)}</td><td></td></tr></tbody>
+                </table>
+            </div>`;
+        }
+
         // ---------- مونتاژ ----------
         const nw = S.netWorth;
         return `<div class="rpt-wrap">
@@ -5269,6 +5324,8 @@
                 <h2>۴. موجودی حساب‌های بانکی و نقدینگی</h2>
                 ${cashSection}
             </div>
+
+            ${supportSection}
 
             <div class="rpt-foot">این گزارش در تاریخ ${dateStr} ساعت ${timeStr} از اطلاعات ذخیره‌شده در برنامه تهیه شده است. مبالغ به تومان.</div>
         </div>`;
@@ -5831,6 +5888,26 @@
         showMessage('رکورد حذف شد');
     }
 
+    // ========== دریافت برای قسط: به حساب اضافه می‌شود ولی درآمد نیست ==========
+    function getSupportEntriesForLoan(loan) {
+        if (!loan) return [];
+        return financeEntries.filter(e => e.type === 'support' && typeof e.loanId === 'number' && e.loanId === loan.createdAt);
+    }
+    function getLoanNameById(id) {
+        const l = loans.find(x => x.createdAt === id);
+        return l ? (l.name || 'بدون نام') : null;
+    }
+    function fillFinanceLoanSelect(selectedId) {
+        const sel = document.getElementById('financeLoanInput');
+        const opts = ['<option value="">بدون ارتباط با وام</option>'];
+        const sorted = loans.slice().sort((a, b) => (a.archived ? 1 : 0) - (b.archived ? 1 : 0));
+        sorted.forEach(l => {
+            opts.push(`<option value="${l.createdAt}">${escapeHtml(l.name || 'بدون نام')}${l.archived ? ' (آرشیو)' : ''}</option>`);
+        });
+        sel.innerHTML = opts.join('');
+        sel.value = (typeof selectedId === 'number' && loans.some(l => l.createdAt === selectedId)) ? String(selectedId) : '';
+    }
+
     // ========== بستانکاری و بدهی در بخش درآمد و هزینه (فقط نمایش؛ جزو آمار درآمد/هزینه نیست) ==========
     // flow = +1 یعنی پول وارد دست من شده، -1 یعنی از دست من خارج شده
     function buildDebtFlowEntries() {
@@ -5867,16 +5944,16 @@
         const groups = {};
         financeEntries.forEach((entry, index) => {
             const key = getMonthKey(entry.date) || 'نامشخص';
-            if (!groups[key]) groups[key] = { income: 0, expense: 0, debtIn: 0, debtOut: 0, entries: [] };
+            if (!groups[key]) groups[key] = { income: 0, expense: 0, supportIn: 0, debtIn: 0, debtOut: 0, entries: [] };
             if (entry.type === 'income') groups[key].income += entry.amount;
             else if (entry.type === 'expense') groups[key].expense += entry.amount;
+            else if (entry.type === 'support') groups[key].supportIn += entry.amount;
             groups[key].entries.push({ entry, index });
         });
-        // بستانکاری/بدهی‌های تسویه‌شده (مبلغ اصلی و پرداخت‌ها) خودکار به آرشیو می‌روند
+        // ردیف‌های بستانکاری/بدهی (مبلغ اصلی و پرداخت‌ها) همیشه در ماه تاریخ خودشان می‌مانند، حتی بعد از تسویه
         buildDebtFlowEntries().forEach(v => {
-            const baseKey = getMonthKey(v.date) || 'نامشخص';
-            const key = (v.settled && !archivedMonths.includes(baseKey)) ? baseKey + '#settled' : baseKey;
-            if (!groups[key]) groups[key] = { income: 0, expense: 0, debtIn: 0, debtOut: 0, entries: [], pseudo: key !== baseKey };
+            const key = getMonthKey(v.date) || 'نامشخص';
+            if (!groups[key]) groups[key] = { income: 0, expense: 0, supportIn: 0, debtIn: 0, debtOut: 0, entries: [], pseudo: false };
             if (v.flow > 0) groups[key].debtIn += v.amount; else groups[key].debtOut += v.amount;
             groups[key].entries.push({ entry: v, index: -1 });
         });
@@ -5926,13 +6003,13 @@
                 ` : `
                     <div class="finance-entry-item">
                         <div>
-                            <div><span class="finance-tag ${entry.type}">${entry.type === 'income' ? 'درآمد' : (entry.type === 'transfer' ? 'جابجایی' : 'هزینه')}</span> ${entry.type === 'transfer'
+                            <div><span class="finance-tag ${entry.type}">${entry.type === 'income' ? 'درآمد' : (entry.type === 'transfer' ? 'جابجایی' : (entry.type === 'support' ? 'دریافت برای قسط' : 'هزینه'))}</span> ${entry.type === 'transfer'
                                 ? `<span class="finance-entry-title">${escapeHtml(entry.bankName || 'نقد')} ← ${escapeHtml(entry.toBankName || 'نقد')}</span>${entry.title && entry.title !== 'جابجایی بین حساب‌ها' ? ' <span class="finance-bank-tag">' + escapeHtml(entry.title) + '</span>' : ''}`
-                                : `<span class="finance-entry-title">${escapeHtml(entry.title)}</span>${entry.bankName ? ` <span class="finance-bank-tag">${ICON_BANK} ${escapeHtml(entry.bankName)}</span>` : ''}`}</div>
+                                : `<span class="finance-entry-title">${escapeHtml(entry.title)}</span>${entry.bankName ? ` <span class="finance-bank-tag">${ICON_BANK} ${escapeHtml(entry.bankName)}</span>` : ''}${(entry.type === 'support' && getLoanNameById(entry.loanId)) ? ` <span class="finance-bank-tag">وام: ${escapeHtml(getLoanNameById(entry.loanId))}</span>` : ''}`}</div>
                             <div class="finance-entry-meta">${entry.date ? timestampToJalali(entry.date) : '—'}${entry.note ? ' — ' + escapeHtml(entry.note) : ''}</div>
                         </div>
                         <div style="display:flex;align-items:center;gap:6px;">
-                            <span class="finance-entry-amount ${entry.type}">${entry.type === 'income' ? '+' : (entry.type === 'transfer' ? '⇄ ' : '−')}${formatCurrency(entry.amount)}</span>
+                            <span class="finance-entry-amount ${entry.type}">${(entry.type === 'income' || entry.type === 'support') ? '+' : (entry.type === 'transfer' ? '⇄ ' : '−')}${formatCurrency(entry.amount)}</span>
                             <button class="finance-edit-btn" data-index="${index}">${ICON_EDIT}</button>
                             <button class="finance-del-btn" data-index="${index}">${ICON_TRASH}</button>
                         </div>
@@ -5950,6 +6027,7 @@
                                 <span class="fm-expense">−${formatCurrency(group.expense)}</span>
                                 <span class="fm-net ${net >= 0 ? 'positive' : 'negative'}">خالص: ${net >= 0 ? '+' : '−'}${formatCurrency(Math.abs(net))}</span>
                             </div>`}
+                            ${group.supportIn ? `<div class="finance-month-totals"><span class="fm-support">دریافت برای قسط (جدا از آمار): +${formatCurrency(group.supportIn)}</span></div>` : ''}
                             ${(group.debtIn || group.debtOut) ? `<div class="finance-month-totals"><span class="fm-debt">بستانکاری/بدهی (جدا از آمار): ورود +${formatCurrency(group.debtIn)} · خروج −${formatCurrency(group.debtOut)}</span></div>` : ''}
                         </div>
                         <div style="display:flex;align-items:center;gap:4px;">
@@ -6007,10 +6085,16 @@
             if (archivedMonths.includes(key)) return s;
             return entry.type === 'expense' ? s + entry.amount : s;
         }, 0);
+        let supportIn = 0;
+        financeEntries.forEach(e => {
+            if (e.type !== 'support') return;
+            const k = getMonthKey(e.date) || 'نامشخص';
+            if (!archivedMonths.includes(k)) supportIn += e.amount || 0;
+        });
         let debtIn = 0, debtOut = 0;
         buildDebtFlowEntries().forEach(v => {
             const key = getMonthKey(v.date) || 'نامشخص';
-            if (archivedMonths.includes(key) || v.settled) return;
+            if (archivedMonths.includes(key)) return;
             if (v.flow > 0) debtIn += v.amount; else debtOut += v.amount;
         });
         const net = computeActiveNetBalance();
@@ -6022,6 +6106,10 @@
             <div class="detail-info-item">
                 <span class="label">مجموع هزینه (ماه‌های فعال)</span>
                 <span class="value yellow">${formatCurrency(totalExpense)} تومان</span>
+            </div>
+            <div class="detail-info-item" style="grid-column:1 / -1;">
+                <span class="label">دریافت برای قسط (ماه‌های فعال) <span style="font-size:0.55rem;color:#7a7e70;">(جدا از درآمد و هزینه)</span></span>
+                <span class="value" style="color:#6fb7a0;">+${formatCurrency(supportIn)} تومان</span>
             </div>
             <div class="detail-info-item" style="grid-column:1 / -1;">
                 <span class="label">بستانکاری و بدهی (ماه‌های فعال) <span style="font-size:0.55rem;color:#7a7e70;">(جدا از درآمد و هزینه)</span></span>
@@ -6072,6 +6160,7 @@
             document.getElementById('financeAmountInput').value = entry.amount ? formatAmountInputValue(entry.amount) : '';
             document.getElementById('financeBankNameInput').value = entry.bankName || '';
             document.getElementById('financeToBankNameInput').value = entry.toBankName || '';
+            fillFinanceLoanSelect(entry.loanId);
             document.getElementById('financeDateInput').value = entry.date ? timestampToJalaliAscii(entry.date) : '';
             document.getElementById('financeNoteInput').value = entry.note || '';
         } else {
@@ -6081,6 +6170,7 @@
             document.getElementById('financeAmountInput').value = '';
             document.getElementById('financeBankNameInput').value = '';
             document.getElementById('financeToBankNameInput').value = '';
+            fillFinanceLoanSelect(null);
             document.getElementById('financeDateInput').value = timestampToJalaliAscii(Date.now());
             document.getElementById('financeNoteInput').value = '';
         }
@@ -6093,8 +6183,10 @@
         const isTransfer = t === 'transfer';
         document.getElementById('financeTitleGroup').style.display = isTransfer ? 'none' : '';
         document.getElementById('financeToBankGroup').style.display = isTransfer ? '' : 'none';
-        document.getElementById('financeTitleLabel').textContent = (t === 'income') ? 'منبع دریافت' : 'نام هزینه';
-        document.getElementById('financeBankLabel').textContent = isTransfer ? 'از حساب (مبدأ) — خالی بماند یعنی نقد' : 'نام بانک (اختیاری)';
+        const isSupport = t === 'support';
+        document.getElementById('financeLoanGroup').style.display = isSupport ? '' : 'none';
+        document.getElementById('financeTitleLabel').textContent = isSupport ? 'نام فرستنده (مثلاً پدر)' : ((t === 'income') ? 'منبع دریافت' : 'نام هزینه');
+        document.getElementById('financeBankLabel').textContent = isTransfer ? 'از حساب (مبدأ) — خالی بماند یعنی نقد' : (isSupport ? 'به حساب (مقصد) — خالی بماند یعنی نقد' : 'نام بانک (اختیاری)');
     }
 
     function closeAddFinanceModal() {
@@ -6104,7 +6196,9 @@
 
     function submitFinanceEntry() {
         const typeVal = document.getElementById('financeTypeInput').value;
-        const type = typeVal === 'income' ? 'income' : (typeVal === 'transfer' ? 'transfer' : 'expense');
+        const type = typeVal === 'income' ? 'income' : (typeVal === 'transfer' ? 'transfer' : (typeVal === 'support' ? 'support' : 'expense'));
+        const loanSel = document.getElementById('financeLoanInput').value;
+        const loanId = (type === 'support' && loanSel) ? parseInt(loanSel, 10) : null;
         let title = document.getElementById('financeTitleInput').value.trim();
         const toBankName = type === 'transfer' ? normalizeBankName(document.getElementById('financeToBankNameInput').value).slice(0, 60) : '';
         const amount = parseAmountInput(document.getElementById('financeAmountInput').value);
@@ -6115,7 +6209,7 @@
         if (type === 'transfer') {
             title = (editingFinanceIndex !== null && financeEntries[editingFinanceIndex] && financeEntries[editingFinanceIndex].type === 'transfer' && financeEntries[editingFinanceIndex].title !== 'جابجایی بین حساب‌ها') ? financeEntries[editingFinanceIndex].title : 'جابجایی بین حساب‌ها';
             if (bankName === toBankName) { showMessage('حساب مبدأ و مقصد نباید یکی باشند', true); return; }
-        } else if (!title) { showMessage(type === 'income' ? 'منبع دریافت را وارد کنید' : 'نام هزینه را وارد کنید', true); return; }
+        } else if (!title) { showMessage(type === 'support' ? 'نام فرستنده را وارد کنید' : (type === 'income' ? 'منبع دریافت را وارد کنید' : 'نام هزینه را وارد کنید'), true); return; }
         if (!amount || amount <= 0) { showMessage('مبلغ معتبر وارد کنید', true); return; }
 
         let date = null;
@@ -6127,7 +6221,7 @@
         if (editingFinanceIndex !== null) {
             const oldEntry = financeEntries[editingFinanceIndex];
             applyFinanceEntryToCash(oldEntry, -1);
-            const updatedEntry = { ...oldEntry, type, title, amount, bankName, toBankName, date, note };
+            const updatedEntry = { ...oldEntry, type, title, amount, bankName, toBankName, loanId, date, note };
             financeEntries[editingFinanceIndex] = updatedEntry;
             applyFinanceEntryToCash(updatedEntry, 1);
             saveFinance();
@@ -6135,7 +6229,7 @@
             closeAddFinanceModal();
             showMessage('تراکنش ویرایش و نقدینگی بروزرسانی شد');
         } else {
-            const newEntry = { type, title, amount, bankName, toBankName, date, note, createdAt: Date.now() };
+            const newEntry = { type, title, amount, bankName, toBankName, loanId, date, note, createdAt: Date.now() };
             financeEntries.push(newEntry);
             applyFinanceEntryToCash(newEntry, 1);
             saveFinance();
